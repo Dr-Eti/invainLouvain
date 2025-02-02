@@ -112,7 +112,7 @@ nodelist_to_adjmatrix <- function(edges_df){
 }
 
 
-invain_louvain <- function(edges_df){
+invain_louvain <- function(edges_df, resolution_par = 1){
   #### A) obtain adjacency matrix                                                                      #####
   adj_output <- nodelist_to_adjmatrix(edges_df)                                      # call own function
   adj_g <- adj_output$adj_mat
@@ -190,9 +190,9 @@ invain_louvain <- function(edges_df){
             } else {
               node_to_host <- adj_dummy[node_i,host_idx]
             }
-            ## Compute modularity gain from local move
-            mod_gain_textbk <- (node_to_host/L) - ((degree_host*degree_guest)/(2*L^2))                                # Textbook formula e.g. Barabasi eqn 9.43 and also p. 370 on the algebra deriving modularity gains from general modularity formula. Louvain is a special case
-            mod_gain <- (node_to_host) - ((degree_host*degree_guest)/(2*L))                                           # variation foudn in Brain Connectivity Toolbox (BCT) in Matlab, and Network Toolbox in R
+            ## Compute modularity gain from local move (resolution param > 1 to detect smaller modules)
+            mod_gain <- (node_to_host/L) - resolution_par*((degree_host*degree_guest)/(2*L^2))                         # Textbook formula e.g. Barabasi eqn 9.43 and also p. 370 on the algebra deriving modularity gains from general modularity formula. Louvain is a special case
+            #mod_gain <- (node_to_host) - resolution_par*((degree_host*degree_guest)/(2*L))                            # variation foudn in Brain Connectivity Toolbox (BCT) in Matlab, and Network Toolbox in R
             ## also slight difference between Barabasi eqn 9.43 and https://www.r-bloggers.com/community-detection-with-louvain-and-infomap/
             ## record modularity gain
             delta_q[node_i,comm_list_dummy[comm_j]] <- mod_gain                                                        
