@@ -1,0 +1,22 @@
+A little while ago I decided I had to wrap my head around what goes on under the hood of the Louvain algorithm for community detection in undirected graphs. At the time I was chiefly interested in clustering "similar" text documents and, in my blissful ignorance, I was happily getting my answers by implicilty trusting  whatever went on under the hood of pre-built applications such as Gephi, VOS viewer, and obviously `igraph` for `R`. Until the results ceased to make intuitive sense, and I could no longer ignore the internal working of pre-built implementations of the Louvain algorithm.
+
+In principle, mine seemed a reasonably achievable quest for clarity: the beautifully curated account given by Barabási (2016: Ch.9) made me believe for a minute that I could have a fair go at replicating how the Louvain algorithm works from scratch. What is more several papers provide fairly accessible pseudo codes (e.g., Traag et al., 2019; Waltman and van Eck, 2013). Not to mention the online tutorials.
+
+In practice, little did I know that - at least back then - there was no detailed implementation of the Louvain algorithm aimed specifically at `R` users: whilst `igraph` is available to them, it relies functions developed in a C-layer. Even with examples from C and Matlab I couldn't for the life of me understand how `cluster_louvain` was dealing with the local moving heuristics i.e. the first stage of the standard two-step procedure described in the original paper (Blondel et al. 2008).
+Long story short I spent good part of summer 2020 failing spectacularly at replicating outcomes that until a moment earlier seemed to effortlessly pop out of Gephi and igraph. A statement to that frustrating time is what ended up being  [my solypsism in the igraph community forum](https://igraph.discourse.group/t/details-for-cluster-louvain-local-moving-heuristic-for-r-users/380) whilst most members were rightly on summer vacation.
+
+Eventually I was lucky engough to stumble across an `R` version of the [Brain Connectivity Toolbox’s implementaton of Louvain](https://rdrr.io/github/AlexChristensen/NetworkToolbox/src/R/louvain.R) which, unlike `cluster_louvain`, was not developed in a C-layer. This implementaiton helped me realise the point I had been missing all along i.e., that I had to ‘wrap’ the so-called "first pass" of the algorithm a loop and iterate a number of times before ‘compacting’ the network. Missing a loop might sound unbelievably silly to those in the know. To my defense, I think that such detail, however key, does not exactly stand out in most descriptions of the algorithm - see e.g., how things are [worded here](https://www.r-bloggers.com/community-detection-with-louvain-and-infomap/).
+
+Since that summer of 2020 I neglected the task of making my "from scratch" Louvain available on GitHub, perhaps convinced that the time I spent trying to make sense of it was in vain. Now I present it as a self-contained function that takes an arc list as input and returns the suggested partition based on graph modularity considerations. I provide 3 example datasets for illustration.  At this stage the data structure expected as input is as shown in these examples. Also, the current version assumes undirected graphs and forces such assumption if the input violates it. To make up for its limitations I provide a benchmark of the output of my implementation with (1) `cluster_louvain` in package `igraph` and (2) `louvain` in package `NetworkToolbox`.
+
+As always this is done in the spirit of self-learning and for the sake of looking under the hood of well-estabished approaches, which might still perform way better.
+
+
+## References
+Barabási, A.-L., (2016). Network science. Cambridge University Press. [Available online](https://networksciencebook.com/chapter/9#introduction9) 
+
+Blondel, V. D., Guillaume, J.-L., Lambiotte, R., & Lefebvre, E. (2008). Fast unfolding of communities in large networks. Journal of Statistical Mechanics, 2008(10), P10008-12. [Available online](https://doi.org/10.1088/1742-5468/2008/10/P10008)
+
+Traag, V.A., Waltman, L. & van Eck, N.J. From Louvain to Leiden: guaranteeing well-connected communities. Sci Rep 9, 5233 (2019). [Available online](https://doi.org/10.1038/s41598-019-41695-z)
+
+Waltman, L., van Eck, N.J. A smart local moving algorithm for large-scale modularity-based community detection. Eur. Phys. J. B 86, 471 (2013). [Available online](https://doi.org/10.1140/epjb/e2013-40829-0)
