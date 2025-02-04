@@ -45,15 +45,15 @@ gc()
 
 modularity_score <- function(nodes_comm_list_fun, adj_fun){
   modul_iter <- 0
-  comm_list_fun <- unique(nodes_comm_list_fun["community"])
-  n_comm_fun <- nrow(comm_list_fun) 
-  L_fun <- sum(adj_fun)/2
-  
-  for (comm_j_sum in 1:n_comm_fun) {
-    iter_comm_idx <- as.numeric(nodes_comm_list_fun[which(nodes_comm_list_fun[,"community"]==comm_list_fun[comm_j_sum,"community"]),"node idx in adj"])          # a bit redundant but just in case the adjacency lines are scrambled
+  comm_list_fun <- c(unlist(unique(nodes_comm_list_fun$community)))
+  n_comm_fun <- length(comm_list_fun) 
+  L_fun <- sum(adj_fun)/2                                                               # this is already available outside the function
+  #L_fun <- L
+  for (comm_j_sum in comm_list_fun) {
+    iter_comm_idx <- which(nodes_comm_list_fun$community == comm_j_sum)
     within_comm <- sum(adj_fun[iter_comm_idx,iter_comm_idx])
     degree_comm <- sum(adj_fun[iter_comm_idx,]) 
-    modul_iter <- modul_iter + (((within_comm/2)/L_fun) - (degree_comm/(2*L_fun))^2)                                                                              # Barabasi, Network Science, eqn. 9.12 p. 340
+    modul_iter <- modul_iter + (((within_comm/2)/L_fun) - (degree_comm/(2*L_fun))^2)     # Barabasi, Network Science, eqn. 9.12 p. 340
   }
   return(modul_iter)
 }
@@ -112,183 +112,160 @@ nodelist_to_adjmatrix <- function(edges_df){
 }
 
 
-invain_louvain <- function(edges_df, resolution_par = 1){
-  #### A) obtain adjacency matrix                                                                      #####
-  adj_output <- nodelist_to_adjmatrix(edges_df)                                      # call own function
-  adj_g <- adj_output$adj_mat
-  tot_arcs_weigth <- sum(adj_g)
-  L <- tot_arcs_weigth/2                                                             # assume undirected
-  
-  #### B) Initial nodes-communities allocation #####
-  node_list <- adj_output$node_list                                                  # alphab. sorted node list
-  n_nodes <- adj_output$n_nodes
-  node_list_idx <- match(node_list, node_list)                                       # map node order onto the node adj matrix line names
-  #node_list <- (rownames(adj_g))                                                    # equivalent alternative
-  #n_nodes <- nrow(adj_g)
-  n_comm <- n_nodes                                                                  # AT FIRST each node is a community
-  comm_list <- sprintf("cn_%03d", 1:n_nodes)
-  nodes_comm_list <- as.data.frame(cbind(node_list_idx, node_list, comm_list))       # Node-communities "dynamic" allocation table
-  colnames(nodes_comm_list) <- c("node idx in adj","node_name", "community")
-  modularity_initial_score <- modularity_score(nodes_comm_list,adj_g)                # Initial modularity score. compare with Q in Network Toolbox or Brain Connectivity Toolbox
-  
-  #### C) Iterative "passess"s #####
-  ## initialise iterations between passes
-  iter_end <- FALSE
+invain_louvain <- function(edges_df, resolution_param = 1, max_iter = 20){
   iter <- 1
-  max_iter <- 100
-  ## initialise lists at each PASS (within random iteration)
-  list_comm_iter <- list()                                                                            # pass output 1: node-comm allocation at each pass
-  list_modulmetric_iter <- list()                                                                     # pass output 2: modularity of the node-comm allocation at each pass
-  ## start EVERYTHING afresh 
-  adj_dummy <- adj_g                                                                                  # make a copy of the adjacency matrix 
-  n_nodes_dummy <- n_nodes
-  node_list_dummy <- node_list
-  nodes_comm_list_dummy <- nodes_comm_list
-  nodes_comm_list_PASS <- nodes_comm_list
-  comm_list_dummy <- comm_list
-  n_comm_dummy <- n_comm
-  while (isFALSE(iter_end) & iter < max_iter){
-    # this serves as stopping criteria
-    delta_q <- matrix(0L, n_nodes_dummy, n_comm_dummy)
-    rownames(delta_q) <- nodes_comm_list_dummy[,"node idx in adj"]                                      # NODES LABELLING DOESN'T MATTER - THAT'S WHAT THE PACKAGE DOES
-    colnames(delta_q) <- nodes_comm_list_dummy[,"community"]
-    ## the first pass itself must be repeated in a loop
-    flag <- TRUE
-    flag_count <- 1
-    max_flag_count <- 100
-    while (flag & flag_count < max_flag_count){
-      ## EACH time the PASS is iterated visit nodes in random order
-      #set.seed(100879)                                                                                 # remove this if you want to vary the random sequence every time
-      rand_node_sort <- sample(n_nodes_dummy)
-      nodes_visit_label_lookup <- nodes_comm_list_dummy[rand_node_sort,]                                # establish correspondence between nodes idx and label after random sorting
-      allocation_flag <- nodes_comm_list_dummy[,"community"]                                            # to compare later for stopping
-      
-    ## C.1)  Classic "FIRST PASS"                                                                     ####
-      for (node_i in rand_node_sort) {                                                                  # visit nodes in random sequence
-        own_comm <- nodes_comm_list_dummy[node_i,"community"]                                           # initial community will be restored if no modularity gain
-        guest_name <- nodes_comm_list_dummy[node_i,"node_name"]
-        degree_guest <- sum(adj_dummy[node_i,])                                                         # node's degrees
-        ## find & describe node's neighbours
-        node_neighbours <- which(adj_dummy[node_i,] > 0)
-        if (length(node_neighbours) > 0){
-          node_neighbours_names <- names(node_neighbours)
-          node_neighbours_idx <- as.numeric(node_neighbours)
-          node_neighbours_comm <- nodes_comm_list_dummy[node_neighbours_idx,"community"]
-        }
-        ## remove node from own community
-        nodes_comm_list_dummy[node_i,"community"] <- "vacant"                                                         # TEST: DEACTIVATE TO FULLY MATCH Network toolbox/BCT  PACKAGE RESULTS because they ADD the delta modularity of bringing back the node to its own SINGLETON community
-        ## To do: perhaps also check if own community is DISCONNECTED after guest is removed from it (main intuition of Leiden algorithm vs Louvain)
-        ## begin local move
-        max_gain <- 0
-        best_host_community <- "none"
-        for (comm_j in 1:n_comm_dummy) {                                                                              # INTENTIONAL to read all communities (initially = nodes) to fill 'delta_q'. As nodes get reassigned some communities may be empty
-          host_idx <- which(nodes_comm_list_dummy[,"community"] == comm_list_dummy[comm_j])                           # returns the index (not the name) of filtered nodes associated with a given community at a given stage of the algorithm         
-          if (length(host_idx) > 0){                                                                     
-            degree_host <- sum(adj_dummy[host_idx,])                                                                  # for undirected, in-degree = out-degree
-            if(length(adj_dummy[node_i,host_idx]) > 1) {                                                              # does the potential host community have more than one member?
-              node_to_host <- sum(adj_dummy[node_i,host_idx])                                                         # if so, sum weighed arcs connecting potential guest and host (the matrix is symmetric)
-            } else {
-              node_to_host <- adj_dummy[node_i,host_idx]
-            }
-            ## Compute modularity gain from local move (resolution param > 1 to detect smaller modules)
-            mod_gain <- (node_to_host/L) - resolution_par*((degree_host*degree_guest)/(2*L^2))                         # Textbook formula e.g. Barabasi eqn 9.43 and also p. 370 on the algebra deriving modularity gains from general modularity formula. Louvain is a special case
-            #mod_gain <- (node_to_host) - resolution_par*((degree_host*degree_guest)/(2*L))                            # variation foudn in Brain Connectivity Toolbox (BCT) in Matlab, and Network Toolbox in R
-            ## also slight difference between Barabasi eqn 9.43 and https://www.r-bloggers.com/community-detection-with-louvain-and-infomap/
-            ## record modularity gain
-            delta_q[node_i,comm_list_dummy[comm_j]] <- mod_gain                                                        
-            ## update best candidate as new host community     
-            if (mod_gain > max_gain){                                                                                 # except the neighbours' communities, other communities surely generate negative modularity gain
-              best_host_community <- comm_list_dummy[comm_j]
-              max_gain <- mod_gain
-            } ## endif compare mod gains
-          } ## endif there are member nodes in a given community
-        } ## stop looping through alternative host communities
-        ## pick new host community OR restore previous
-        if (max_gain > 0){                                                                  # determines whether or not the FIRT PASS will be iterated again
-          nodes_comm_list_dummy[node_i,"community"] <- best_host_community
-        } else {
-          nodes_comm_list_dummy[node_i,"community"] <- own_comm                             # restore original
-          best_host_community <- own_comm                                                   # only for info during debugging
-        }
-      } ## stop looping through nodes
-      ## check stopping creteria for first pass
-      if (identical(nodes_comm_list_dummy[,"community"], allocation_flag)){
-        flag <- FALSE 
-      } 
-      flag_count <- flag_count + 1
-    } ## end while flag (stop looping first pass)
-    ## check if iterations are over
-    check_max <- apply(delta_q, 1, max)                                                     # in the presence of ties, there may be multiple max
-    new_host <- apply(delta_q, 1, which.max)                                                # index of max, by row (without looping)
-    new_host <- new_host[which(check_max > 0)]                                                                               
-    if (length(new_host) == 0){
-      iter_end <- TRUE
-    } 
-   
-    ## C.2) SECOND PASS ####
-    comm_list_dummy <- unique(nodes_comm_list_dummy[,"community"])                                                     # list of unique communities obtained from first pass to become nodes in the second pass
-    n_comm_dummy <- length(comm_list_dummy)
-    ## initialise new collapsed adjacency matrix for SECOND PASS
-    new_adj <- matrix(0L,n_comm_dummy, n_comm_dummy)
-    ## Compress network whilst computing modularity over communities for the latest partitioning
-    modul_iter <- 0
-    for (comm_j_sum in 1:n_comm_dummy) {
-      iter_comm_idx <- which(nodes_comm_list_dummy[,"community"]==comm_list_dummy[comm_j_sum])        
-      within_comm <- sum(adj_dummy[iter_comm_idx,iter_comm_idx])
-      degree_comm <- sum(adj_dummy[iter_comm_idx,]) 
-      modul_iter <- modul_iter + (((within_comm/2)/L) - (degree_comm/(2*L))^2)                                          # Barabasi, Network Science, eqn. 9.12 p. 340
-      ## COLLAPSE NODES WITHIN SAME CATEGORY
-      for (comm_i_sum in 1:n_comm_dummy){
-        if(comm_i_sum != comm_j_sum){
-          iter_comm_idx_target <- which(nodes_comm_list_dummy[,"community"]==comm_list_dummy[comm_i_sum]) 
-          new_adj[comm_j_sum,comm_i_sum] <- sum(adj_dummy[iter_comm_idx,iter_comm_idx_target])
-        } else {
-          new_adj[comm_j_sum,comm_i_sum] <- within_comm
+  iter_end <- FALSE
+  list_adj_mat <- list()
+  list_comm_iter <- list()                                                              # nodes communities allocation at each pass
+  list_modulmetric_iter <- list()                                                       # modularity of the node-comm allocation at each pass
+  set.seed(100879)                                                                      
+  adj_output <- nodelist_to_adjmatrix(edges_df)                                         # call own function
+  adj_mat_export <- adj_output$adj_mat
+  
+  ## initialise progress bar
+  pb = utils::txtProgressBar(min = 0, max = max_iter, initial = 0, style = 3) 
+  
+  #### Iterative "passes" (each pass consists of 2 steps)                               #####
+  while (!iter_end & iter < max_iter){
+    ## stuff needed all the time
+    adj_g <- adj_output$adj_mat
+    list_adj_mat[[iter]] <- adj_g
+    tot_arcs_weigth <- sum(adj_g)
+    L <- tot_arcs_weigth/2                                                             # assume undirected
+    node_neighbours_list <- apply(adj_g, 1, function(x){
+      which(x != 0)
+    })
+    node_degrees <- apply(adj_g, 1, function(x){
+      sum(x)
+    })
+    node_list <- adj_output$node_list                                                  # alphab. sorted node list
+    n_nodes <- adj_output$n_nodes
+    n_comm <- n_nodes                                                                  # AT FIRST each node is a community
+    comm_list <- paste0(sprintf("cn_%03d", 1:n_nodes),"_",iter)
+    nodes_comm_list <- as.data.frame(cbind(node_list, comm_list))                      # Node-communities "dynamic" allocation table
+    colnames(nodes_comm_list) <- c("node_name", "community")
+    modularity_initial_score <- modularity_score(nodes_comm_list,adj_g)                # Initial modularity score. Calls another function
+    
+    #### current pass, step 1 - must be looped                                                        ####
+    firstpass_repeat <- TRUE
+    firstpass_repeat_count <- 1
+    max_firstpass_count <- max_iter
+    mod_improve_previous <- 0
+    while (firstpass_repeat & firstpass_repeat_count < max_firstpass_count){
+      ## this is the core of step 1: try change nodes-communities allocation                                          
+      starting_allocation <- nodes_comm_list$community                                                    # if the iteration doesn't change the starting community allocation, break out
+      rand_node_sort <- sample(n_nodes)                                                                   # EACH time the PASS is iterated visit nodes in random order
+      # nodes_comm_list[rand_node_sort, ]
+      for(node_i in rand_node_sort){
+        guest_own_comm <-  nodes_comm_list$community[node_i]                                              # "guest" is our current node/community, to be merged with different "host" communities
+        degree_guest <- as.numeric(node_degrees[node_i])                                                  # guest's degrees
+        node_neighbours <- node_neighbours_list[[node_i]]
+        if (length(node_neighbours) > 0){                                                                 # if there are neighbouring communities
+          node_neighbours_idx <- as.numeric(node_neighbours)                                          
+          node_neighbours_comm <- unique(nodes_comm_list$community[node_neighbours_idx])                  # lookup neighbouringcommunities as candidates for a possible merge
+          ## [PLEASE CHECK] chose whether or not to detach from current community and then bring back
+          nodes_comm_list[node_i,"community"] <- "vacant"                                                 # "detach" node from own community
+          #node_neighbours_comm <- node_neighbours_comm[which(node_neighbours_comm != guest_own_comm)]    # briefly entertained the idea of skipping the current community - not sure if this messes up the whole process
+          if(length(node_neighbours_comm) > 0){
+            mod_gain <- sapply(node_neighbours_comm, function(comm_j){
+              host_idx <- which(nodes_comm_list[,"community"] ==  comm_j)  
+              if (length(host_idx) > 0){                                                                     
+                degree_host_within <- sum(adj_g[host_idx, host_idx])
+                degree_host <- sum(adj_g[host_idx,])                                                      # assuming undirected, in-degree = out-degree
+                node_to_host <- sum(adj_g[node_i, host_idx]) 
+                ## modularity change equation
+                (node_to_host/L) - resolution_param*((degree_host*degree_guest)/(2*L^2))                  # see e.g. Barabasi eqn 9.43 and also p. 370. change in modularity due to the move 
+              } else {
+                0
+              }
+            })
+            test_improve_mod <- max(as.numeric(mod_gain)) > 1e-06
+          } else {
+            test_improve_mod <- F
+          }
+          if (test_improve_mod){  
+            new_comm <- names(which.max(mod_gain))
+          } else {
+            new_comm <- guest_own_comm                                                                    # re-attach to current community
+          }
+          nodes_comm_list$community[node_i] <- new_comm                                                   # update best candidate as new host community   
         }
       }
+      ## did this iteration of step 1 achieve an improvement over previous?
+      mod_improve_iter <- (modularity_score(nodes_comm_list, adj_g) - mod_improve_previous > 1e-06)
+      if (!mod_improve_iter | identical(nodes_comm_list$community, starting_allocation)){
+        firstpass_repeat <- FALSE                                                                        # repeating the first pass didn't change the community to which nodes are allocated: break out
+      } else {
+        firstpass_repeat_count <- firstpass_repeat_count + 1  
+      }
     }
-    ## Link compressed matrix results to original nodes
-    if (iter > 1){
-      lookup_previous_comms <- unique(nodes_comm_list_PASS[,"community"])                                         # allocation before this pass was performed
-      previous_comms <- nodes_comm_list_PASS[,"community"]
-      for (i_dummy in 1:n_nodes_dummy){
-        lookup_comm <- lookup_previous_comms[i_dummy]                                                             # to avoid filtering after updating contents
-        lookup_node_idx <- which(previous_comms == lookup_comm)                                                   # to avoid filtering after updating contents
-        nodes_comm_list_PASS[lookup_node_idx,"community"] <- nodes_comm_list_dummy[i_dummy, "community"]
-      } 
-    } else {
-      nodes_comm_list_PASS <- nodes_comm_list_dummy
+    ## Store outputs of step 1 at this PASS iteration
+    list_modulmetric_iter[[iter]] <- modularity_score(nodes_comm_list, adj_g)                           # Record modularity at this iteration
+    list_comm_iter[[iter]] <- nodes_comm_list                                                           # Record allocation at this iteration
+    ## check if any progress has been made since previous pass
+    if(iter > 1){
+      prev_iter <- iter - 1
+      if(list_modulmetric_iter[[iter]] - list_modulmetric_iter[[prev_iter]] < 1e-06){
+        iter_end <- TRUE
+        optimal_modul <- list_modulmetric_iter[[iter]]
+      }
     }
-    ## Store outputs at this iteration
-    list_modulmetric_iter[[iter]] <- modularity_score(nodes_comm_list_dummy, adj_dummy)                          # Record modularity at this iteration
-    #all.equal(modul_iter, modularity_score(nodes_comm_list_dummy, adj_dummy))                                   # test that the modularity across community is the same
-    list_comm_iter[[iter]] <- nodes_comm_list_PASS                                                               # Record allocation at this iteration
-    ## re-initialise using compressed adjacency matrix (previous communities become nodes)
-    adj_dummy <- new_adj
-    n_nodes_dummy <- nrow(adj_dummy)
-    node_list_dummy <- sprintf(paste0("n_iter", iter, "_%03d"), 1:n_comm_dummy)
-    rownames(adj_dummy) <- node_list_dummy
-    colnames(adj_dummy) <- node_list_dummy
-    node_list_idx <- match(node_list_dummy, rownames(adj_dummy))
-    nodes_comm_list_dummy <- as.data.frame(cbind(node_list_idx,node_list_dummy, comm_list_dummy))
-    colnames(nodes_comm_list_dummy) <- c("node idx in adj","node_name", "community")
-    ## move on to repeat
-    iter <- iter + 1
+    
+    #### current pass, Step 2: collapse nodes into communities                                        ####
+    comm_list <- unique(nodes_comm_list[,"community"])                                                # communities from first pass become nodes in the second pass
+    n_comm <- length(comm_list)
+    agg_nodes_idx <- expand.grid(1:n_comm, 1:n_comm)
+    agg_nodes_idx <- agg_nodes_idx[,c(2:1)]
+    agg_nodes_idx <- agg_nodes_idx[which(agg_nodes_idx[,2] >= agg_nodes_idx[,1]),]                    # assuming undirected network. This time include self-loop
+    colnames(agg_nodes_idx) <- c("source_node","target_node")
+    rownames(agg_nodes_idx) <- NULL
+    new_arclist_weight <- apply(agg_nodes_idx, 1, function(x){
+      a <- as.numeric(x[1])
+      b <- as.numeric(x[2])
+      nodes_a <- which(nodes_comm_list$community %in% comm_list[a])
+      nodes_b <- which(nodes_comm_list$community %in% comm_list[b])
+      sum(adj_g[nodes_a, nodes_b])
+    })
+    from_to_compress <- sapply(agg_nodes_idx, function(x){
+      comm_list[x]
+    })
+    edges_compress_df <- data.frame(source_node = as.character(from_to_compress[,1]),
+                                    target_node = as.character(from_to_compress[,2]),
+                                    weight = as.numeric(new_arclist_weight),
+                                    stringsAsFactors = F)
+    adj_compress_output <- nodelist_to_adjmatrix(edges_compress_df)                                    # get compressed adjacency matrix where communities are now nodes
+    ## prepare for next iteration
+    adj_output <- adj_compress_output
+    if(!iter_end){
+      iter <- iter + 1
+      
+      ## update progress bar
+      utils::setTxtProgressBar(pb,iter)
+    }
   } # end iteration between passes 
   
-  ## E) prepare output ####
-  ## renumber communities
-  community_re_number <- match(nodes_comm_list_PASS$community, unique(nodes_comm_list_PASS$community))
-  my_own_louvain_communities <- as.data.frame(cbind(nodes_comm_list_PASS$node_name, community_re_number))
-  colnames(my_own_louvain_communities) <- c("node_ID", "community_ID")
+  ## close progress bar
+  close(pb)
   
-  ## modularity
-  my_own_modularity <- as.numeric(list_modulmetric_iter[[iter - 1]])
-  
+  ## Backtrack
+  for(j in iter:1){                                                               # start from last record
+    x <- list_comm_iter[[j]]
+    community_iter <- as.matrix(x[2])
+    nodes_iter <- as.matrix(x[1])
+    if(j < iter){
+      community_re_number <- backward_key$community[match(community_iter, backward_key$node_name )]
+      backward_key <- as.data.frame(cbind(nodes_iter,  community_re_number))
+      colnames(backward_key) <- c("node_name", "community_final")
+    } else {
+      community_re_number <- match(community_iter, unique(community_iter))
+      backward_key <- as.data.frame(cbind(nodes_iter,  community_re_number))
+      colnames(backward_key) <- c("node_name", "community_final")
+    }
+  }
   ## output list
-  output_list <- list(louvain_communities = my_own_louvain_communities,
-                      modularity = my_own_modularity,
-                      adj_mat = adj_g)
+  output_list <- list(louvain_communities = backward_key,
+                      modularity = optimal_modul,
+                      adj_mat = adj_mat_export)
   return(output_list)
 }
 
